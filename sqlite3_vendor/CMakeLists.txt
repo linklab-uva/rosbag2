@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 project(sqlite3_vendor)
 
-list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
-find_package(SQLite3)
+#list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
+#find_package(SQLite3)
 
 if (NOT SQLite3_FOUND)
   set(extra_cmake_args)
