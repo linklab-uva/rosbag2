@@ -9,7 +9,7 @@ option(FORCE_BUILD_VENDOR_PKG
 
 if(NOT FORCE_BUILD_VENDOR_PKG)
   list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
-  find_package(SQLite3 QUIET)
+  find_package(SQLite3 MODULE QUIET)
 endif()
 
 if (NOT SQLite3_FOUND)

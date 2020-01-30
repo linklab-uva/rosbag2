@@ -42,9 +42,8 @@
 ##################################################################################################
 
 # First attempt to find Config-file package
-find_package(SQLite3 CONFIG QUIET)
-
-if (NOT SQLite3_FOUND)
+find_package(sqlite3 CONFIG QUIET)
+if (NOT TARGET sqlite3)
 
 
     # Get package location hint from environment variable (if any)
@@ -78,4 +77,9 @@ if (NOT SQLite3_FOUND)
         set(SQLite3_INCLUDE_DIRS ${SQLite3_INCLUDE_DIR})
         set(SQLite3_LIBRARIES ${SQLite3_LIBRARY})
     endif()
+else()
+    set(SQLite3_FOUND TRUE)
+    set(SQLite3_LIBRARIES sqlite3)
+    set(SQLite3_DIR ${sqlite3_DIR})
+    get_target_property(SQLite3_INCLUDE_DIRS sqlite3 INTERFACE_INCLUDE_DIRECTORIES)
 endif()
