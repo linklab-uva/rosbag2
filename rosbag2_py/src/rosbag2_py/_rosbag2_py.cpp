@@ -20,9 +20,9 @@ namespace py = pybind11;
 #include <chrono>
 #include <string>
 
-#include "rosbag2/readers/sequential_reader.hpp"
+#include "rosbag2_cpp/readers/sequential_reader.hpp"
 // #include "rmw/rmw.h"
-
+namespace rosbag2=rosbag2_cpp;
 namespace rosbag2_py {
 
 class SequentialReader
@@ -31,13 +31,13 @@ public:
   SequentialReader() : reader_()
   {}
 
-  void open(const std::string uri)
+  void open(const std::string uri, const std::string storage_id = "sqlite3")
   {
     // TODO(jacobperron): pybind StorageOptions nad ConverterOptions and pass to open
-    rosbag2::StorageOptions storage_options{};
+    rosbag2_cpp::StorageOptions storage_options{};
     storage_options.uri = uri;
-    storage_options.storage_id = "sqlite3";
-    rosbag2::ConverterOptions converter_options{};
+    storage_options.storage_id = storage_id;
+    rosbag2_cpp::ConverterOptions converter_options{};
     converter_options.input_serialization_format = "cdr";
     converter_options.output_serialization_format = "cdr";
     reader_.open(storage_options, converter_options);
@@ -62,13 +62,13 @@ public:
      auto topics = reader_.get_all_topics_and_types();
      // We're making an assumption that there is only one type per topic
      std::map<std::string, std::string> output;
-     for (const rosbag2::TopicMetadata & topic_metadata : topics) {
+     for (const rosbag2_storage::TopicMetadata & topic_metadata : topics) {
        output[topic_metadata.name] = topic_metadata.type;
      }
      return output;
   }
 private:
-  rosbag2::readers::SequentialReader reader_;
+  rosbag2_cpp::readers::SequentialReader reader_;
 };
 
 }

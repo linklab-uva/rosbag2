@@ -4,14 +4,6 @@ project(zstd_vendor)
 
 find_package(ament_cmake REQUIRED)
 
-option(FORCE_BUILD_VENDOR_PKG
-  "Build zstd from source, even if system-installed package is available"
-  OFF)
-
-if(NOT FORCE_BUILD_VENDOR_PKG)
-  find_package(zstd QUIET)
-endif()
-
 macro(build_zstd)
   set(extra_cmake_args)
 
@@ -35,21 +27,33 @@ macro(build_zstd)
     TIMEOUT 60
     SOURCE_SUBDIR build/cmake
     CMAKE_ARGS
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}_install
       ${extra_cmake_args})
 
   install(
     DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}_install/
     DESTINATION ${CMAKE_INSTALL_PREFIX})
-endmacro()
+endmacro(build_zstd)
 
-if (NOT zstd_FOUND OR "${zstd_VERSION}" VERSION_LESS 1.4.4)
-  build_zstd()
-else()
-  message(STATUS "Found Zstd, skipping build.")
-endif()
 
-ament_export_libraries(zstd)
-ament_export_include_directories(include)
 
-ament_package()
+option(FORCE_BUILD_VENDOR_PKG
+  "Build zstd from source, even if system-installed package is available"
+  OFF
+  )
+
+#list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
+list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_SOURCE_DIR}/cmake/Modules")
+message(STATUS "CMAKE_MODULE_PATH: ${CMAKE_MODULE_PATH}")
+find_package(zstd REQUIRED)
+message(STATUS "zstd_INCLUDE_DIRS: ${zstd_INCLUDE_DIRS}")
+
+ament_export_dependencies(zstd)
+ament_export_libraries(zstd::zstd)
+ament_export_include_directories(${zstd_INCLUDE_DIRS})  
+install(DIRECTORY cmake DESTINATION share/${PROJECT_NAME})
+
+ament_package(
+  CONFIG_EXTRAS "zstd_vendor-extras.cmake"
+  )

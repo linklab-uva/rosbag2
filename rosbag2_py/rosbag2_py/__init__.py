@@ -1,0 +1,1 @@
+from rosbag2_py._rosbag2_py import SequentialReader as SequentialReader
