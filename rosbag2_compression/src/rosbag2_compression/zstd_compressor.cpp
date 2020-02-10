@@ -34,6 +34,8 @@ constexpr const int kDefaultZstdCompressionLevel = 1;
 
 // String constant used to identify ZstdCompressor.
 constexpr const char kCompressionIdentifier[] = "zstd";
+// Used as a parameter type in a function that accepts the output of ZSTD_compress.
+using ZstdCompressReturnType = decltype(ZSTD_compress(nullptr, 0, nullptr, 0, 0));
 
 /**
  * Open a file using the OS-specific C API.
@@ -62,7 +64,11 @@ std::vector<uint8_t> get_input_buffer(const std::string & uri)
   // Read in buffer, handling accordingly
   const auto file_pointer = open_file(uri.c_str(), "rb");
   if (file_pointer == nullptr) {
-    throw std::runtime_error{"Error opening file"};
+    std::stringstream errmsg;
+    errmsg << "Error opening file: \"" << uri <<
+      "\" for binary reading! errno(" << errno << ")";
+
+    throw std::runtime_error{errmsg.str()};
   }
 
   const auto decompressed_buffer_length = rcutils_get_file_size(uri.c_str());
@@ -71,7 +77,7 @@ std::vector<uint8_t> get_input_buffer(const std::string & uri)
     fclose(file_pointer);
 
     std::stringstream errmsg;
-    errmsg << "Unable to get size of file: " << uri;
+    errmsg << "Unable to get size of file: \"" << uri << "\"";
 
     throw std::runtime_error{errmsg.str()};
   }
@@ -83,14 +89,19 @@ std::vector<uint8_t> get_input_buffer(const std::string & uri)
     decompressed_buffer.data(), sizeof(uint8_t), decompressed_buffer.size(), file_pointer);
 
   if (read_count != decompressed_buffer_length) {
-    ROSBAG2_COMPRESSION_LOG_ERROR_STREAM("Bytes read (" << read_count <<
-      ") != decompressed_buffer_length (" << decompressed_buffer.size() << ")!");
+    ROSBAG2_COMPRESSION_LOG_ERROR_STREAM(
+      "Bytes read (" << read_count <<
+        ") != decompressed_buffer_length (" << decompressed_buffer.size() << ")!");
     // An error indicator is set by this, so the following check will throw
   }
 
   if (ferror(file_pointer)) {
     fclose(file_pointer);
-    throw std::runtime_error{"Unable to read file"};
+
+    std::stringstream errmsg;
+    errmsg << "Unable to read binary data from file: \"" << uri << "\"!";
+
+    throw std::runtime_error{errmsg.str()};
   }
   fclose(file_pointer);
   return decompressed_buffer;
@@ -107,7 +118,7 @@ void write_output_buffer(
 {
   if (output_buffer.empty()) {
     std::stringstream errmsg;
-    errmsg << "Cannot write empty buffer to file: " << uri;
+    errmsg << "Cannot write empty buffer to file: \"" << uri << "\"";
 
     throw std::runtime_error{errmsg.str()};
   }
@@ -120,22 +131,28 @@ void write_output_buffer(
     file_pointer);
 
   if (write_count != output_buffer.size()) {
-    ROSBAG2_COMPRESSION_LOG_ERROR_STREAM("Bytes written (" << write_count <<
-      ") != output_buffer size (" << output_buffer.size() << ")!");
+    ROSBAG2_COMPRESSION_LOG_ERROR_STREAM(
+      "Bytes written (" << write_count <<
+        ") != output_buffer size (" << output_buffer.size() << ")!");
     // An error indicator is set by fwrite, so the following check will throw.
   }
 
   if (ferror(file_pointer)) {
     fclose(file_pointer);
-    throw std::runtime_error{"Unable to write compressed file"};
+
+    std::stringstream errmsg;
+    errmsg << "Unable to write compressed data to file: \"" << uri << "\"!";
+
+    throw std::runtime_error{errmsg.str()};
   }
   fclose(file_pointer);
 }
 
 /**
  * Checks compression_result and throws a runtime_error if there was a ZSTD error.
+ * \param compression_result is the return value of ZSTD_compress.
  */
-void throw_on_zstd_error(const size_t compression_result)
+void throw_on_zstd_error(const ZstdCompressReturnType compression_result)
 {
   if (ZSTD_isError(compression_result)) {
     std::stringstream error;
@@ -184,7 +201,7 @@ std::string ZstdCompressor::compress_uri(const std::string & uri)
 
   // Perform compression and check.
   // compression_result is either the actual compressed size or an error code.
-  const size_t compression_result = ZSTD_compress(
+  const auto compression_result = ZSTD_compress(
     compressed_buffer.data(), compressed_buffer.size(),
     decompressed_buffer.data(), decompressed_buffer.size(), kDefaultZstdCompressionLevel);
   throw_on_zstd_error(compression_result);

@@ -1,4 +1,6 @@
 # rosbag2
+![License](https://img.shields.io/github/license/ros2/rosbag2)
+[![GitHub Action Status](https://github.com/ros2/rosbag2/workflows/Test%20rosbag2/badge.svg)](https://github.com/ros2/rosbag2/actions)
 
 Repository for implementing rosbag2 as described in its corresponding [design article](https://github.com/ros2/design/blob/f69fbbd11848e3dd6866b71a158a1902e31e92f1/articles/rosbags.md).
 
@@ -36,6 +38,7 @@ Clone this repository into the source folder:
 ```
 $ git clone https://github.com/ros2/rosbag2.git
 ```
+**[Note]**: if you are only building rosbag2 on top of a Debian Installation of ROS2, please git clone the branch following your current ROS2 distribution. 
 
 Then build all the packages with this command:
 

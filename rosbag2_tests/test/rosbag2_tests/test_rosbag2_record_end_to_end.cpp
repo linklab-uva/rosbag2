@@ -21,6 +21,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rcpputils/filesystem_helper.hpp"
 #include "rcutils/filesystem.h"
+#include "rosbag2_compression/zstd_decompressor.hpp"
 #include "rosbag2_storage/metadata_io.hpp"
 #include "rosbag2_test_common/process_execution_helpers.hpp"
 
@@ -54,6 +55,59 @@ std::shared_ptr<test_msgs::msg::Strings> create_string_message(
 }
 }  // namespace
 
+#ifndef _WIN32
+TEST_F(RecordFixture, record_end_to_end_test_with_zstd_file_compression) {
+  constexpr const char topic_name[] = "/test_topic";
+
+  auto message = get_messages_strings()[0];
+  message->string_value = "test";
+  size_t expected_test_messages = 100;
+
+  std::stringstream cmd;
+  cmd << "ros2 bag record" <<
+    " --compression-mode file" <<
+    " --compression-format zstd" <<
+    " --output " << root_bag_path_.string() <<
+    " " << topic_name;
+
+  auto process_handle = start_execution(cmd.str());
+  wait_for_db();
+
+  pub_man_.run_scoped_publisher(
+    topic_name,
+    message,
+    50ms,
+    expected_test_messages);
+
+  stop_execution(process_handle);
+
+  wait_for_metadata();
+
+  const auto compressed_bag_file_path = get_compressed_bag_file_path(0);
+
+  ASSERT_TRUE(compressed_bag_file_path.exists()) <<
+    "Expected compressed bag file path: \"" <<
+    compressed_bag_file_path.string() << "\" to exist!";
+
+  rosbag2_compression::ZstdDecompressor decompressor;
+
+  const auto decompressed_uri = decompressor.decompress_uri(compressed_bag_file_path.string());
+  const auto database_path = get_bag_file_path(0).string();
+
+  ASSERT_EQ(decompressed_uri, database_path) <<
+    "Expected decompressed URI to be same as uncompressed bag file path!";
+  ASSERT_TRUE(rcpputils::fs::exists(database_path)) <<
+    "Expected decompressed first bag file to exist!";
+
+  auto test_topic_messages = get_messages_for_topic<test_msgs::msg::Strings>(topic_name);
+  EXPECT_GT(test_topic_messages.size(), 0u);
+
+  for (const auto & message : test_topic_messages) {
+    EXPECT_EQ(message->string_value, "test");
+  }
+}
+#endif
+
 TEST_F(RecordFixture, record_end_to_end_test) {
   auto message = get_messages_strings()[0];
   message->string_value = "test";
@@ -63,15 +117,18 @@ TEST_F(RecordFixture, record_end_to_end_test) {
   wrong_message->string_value = "wrong_content";
 
   auto process_handle = start_execution(
-    "ros2 bag record --output " + root_bag_path_ + " /test_topic");
+    "ros2 bag record --output " + root_bag_path_.string() + " /test_topic");
   wait_for_db();
 
   pub_man_.add_publisher("/test_topic", message, expected_test_messages);
   pub_man_.add_publisher("/wrong_topic", wrong_message);
 
-  rosbag2_storage_plugins::SqliteWrapper
-    db(database_path_, rosbag2_storage::storage_interfaces::IOFlag::READ_ONLY);
-  pub_man_.run_publishers([this, &db](const std::string & topic_name) {
+  const auto database_path = get_bag_file_path(0).string();
+
+  rosbag2_storage_plugins::SqliteWrapper db{
+    database_path, rosbag2_storage::storage_interfaces::IOFlag::READ_ONLY};
+  pub_man_.run_publishers(
+    [this, &db](const std::string & topic_name) {
       return count_stored_messages(db, topic_name);
     });
 
@@ -83,19 +140,23 @@ TEST_F(RecordFixture, record_end_to_end_test) {
   rosbag2_storage::BagMetadata metadata{};
   metadata.version = 1;
   metadata.storage_identifier = "sqlite3";
-  metadata.relative_file_paths = {"bag_0.db3"};
+  metadata.relative_file_paths = {get_bag_file_path(0).string()};
   metadata.duration = std::chrono::nanoseconds(0);
   metadata.starting_time =
     std::chrono::time_point<std::chrono::high_resolution_clock>(std::chrono::nanoseconds(0));
   metadata.message_count = 0;
   rosbag2_storage::MetadataIo metadata_io;
-  metadata_io.write_metadata(root_bag_path_, metadata);
+  metadata_io.write_metadata(root_bag_path_.string(), metadata);
 #endif
 
+  wait_for_metadata();
   auto test_topic_messages = get_messages_for_topic<test_msgs::msg::Strings>("/test_topic");
   EXPECT_THAT(test_topic_messages, SizeIs(Ge(expected_test_messages)));
-  EXPECT_THAT(test_topic_messages,
-    Each(Pointee(Field(&test_msgs::msg::Strings::string_value, "test"))));
+
+  for (const auto & message : test_topic_messages) {
+    EXPECT_EQ(message->string_value, "test");
+  }
+
   EXPECT_THAT(get_rwm_format_for_topic("/test_topic", db), Eq(rmw_get_serialization_format()));
 
   auto wrong_topic_messages = get_messages_for_topic<test_msgs::msg::BasicTypes>("/wrong_topic");
@@ -110,7 +171,7 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_metadata_contains_all_top
   constexpr const int bagfile_split_size = 4 * 1024 * 1024;  // 4MB.
   std::stringstream command;
   command << "ros2 bag record" <<
-    " --output " << root_bag_path_ <<
+    " --output " << root_bag_path_.string() <<
     " --max-bag-size " << bagfile_split_size <<
     " -a";
   auto process_handle = start_execution(command.str());
@@ -141,8 +202,9 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_metadata_contains_all_top
 
   stop_execution(process_handle);
 
+  wait_for_metadata();
   rosbag2_storage::MetadataIo metadataIo;
-  const auto metadata = metadataIo.read_metadata(root_bag_path_);
+  const auto metadata = metadataIo.read_metadata(root_bag_path_.string());
   // Verify at least 2 topics are in the metadata.
   // There may be more if the test system is noisy.
   EXPECT_GT(metadata.topics_with_message_count.size(), 1u);
@@ -164,7 +226,7 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_bagsize_split_is_at_least
   constexpr const int bagfile_split_size = 4 * 1024 * 1024;  // 4MB.
   std::stringstream command;
   command << "ros2 bag record " <<
-    " --output " << root_bag_path_ <<
+    " --output " << root_bag_path_.string() <<
     " --max-bag-size " << bagfile_split_size <<
     " " << topic_name;
   auto process_handle = start_execution(command.str());
@@ -196,24 +258,21 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_bagsize_split_is_at_least
 
     // Loop until expected_splits in case it split or the bagfile doesn't exist.
     for (int i = 0; i < expected_splits; ++i) {
-      std::stringstream bagfile_name;
-      bagfile_name << "bag_" << i << ".db3";
+      const auto bag_file_path = get_bag_file_path(i);
 
-      const auto bagfile_path =
-        (rcpputils::fs::path(root_bag_path_) / bagfile_name.str());
-
-      if (bagfile_path.exists()) {
-        metadata.relative_file_paths.push_back(bagfile_path.string());
+      if (bag_file_path.exists()) {
+        metadata.relative_file_paths.push_back(bag_file_path.string());
       } else {
         break;
       }
     }
 
-    metadata_io.write_metadata(root_bag_path_, metadata);
+    metadata_io.write_metadata(root_bag_path_.string(), metadata);
   }
 #endif
 
-  const auto metadata = metadata_io.read_metadata(root_bag_path_);
+  wait_for_metadata();
+  const auto metadata = metadata_io.read_metadata(root_bag_path_.string());
   const auto actual_splits = static_cast<int>(metadata.relative_file_paths.size());
 
   // TODO(zmichaels11): Support reliable sync-to-disk for more accurate splits.
@@ -237,7 +296,7 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_max_size_not_reached) {
   constexpr const int bagfile_split_size = 4 * 1024 * 1024;  // 4MB.
   std::stringstream command;
   command << "ros2 bag record " <<
-    " --output " << root_bag_path_ <<
+    " --output " << root_bag_path_.string() <<
     " --max-bag-size " << bagfile_split_size <<
     " " << topic_name;
   auto process_handle = start_execution(command.str());
@@ -269,22 +328,22 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_max_size_not_reached) {
     rosbag2_storage::BagMetadata metadata;
     metadata.version = 2;
     metadata.storage_identifier = "sqlite3";
-
-    const auto bag_path = rcpputils::fs::path(root_bag_path_) / "bag_0.db3";
-
-    metadata.relative_file_paths = {bag_path.string()};
-    metadata_io.write_metadata(root_bag_path_, metadata);
+    metadata.relative_file_paths = {get_bag_file_path(0).string()};
+    metadata_io.write_metadata(root_bag_path_.string(), metadata);
   }
 #endif
 
-  const auto metadata = metadata_io.read_metadata(root_bag_path_);
+  wait_for_metadata();
+  const auto metadata = metadata_io.read_metadata(root_bag_path_.string());
 
   // Check that there's only 1 bagfile and that it exists.
   EXPECT_EQ(1u, metadata.relative_file_paths.size());
   EXPECT_TRUE(rcpputils::fs::exists(metadata.relative_file_paths[0]));
 
   // Check that the next bagfile does not exist.
-  EXPECT_FALSE((rcpputils::fs::path(root_bag_path_) / "bag_1.db3").exists());
+  const auto next_bag_file = get_bag_file_path(1);
+  EXPECT_FALSE(next_bag_file.exists()) << "Expected next bag file: \"" <<
+    next_bag_file.string() << "\" to not exist!";
 }
 
 TEST_F(RecordFixture, record_end_to_end_with_splitting_splits_bagfile) {
@@ -293,7 +352,7 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_splits_bagfile) {
 
   std::stringstream command;
   command << "ros2 bag record" <<
-    " --output " << root_bag_path_ <<
+    " --output " << root_bag_path_.string() <<
     " --max-bag-size " << bagfile_split_size <<
     " " << topic_name;
   auto process_handle = start_execution(command.str());
@@ -328,21 +387,100 @@ TEST_F(RecordFixture, record_end_to_end_with_splitting_splits_bagfile) {
     metadata.storage_identifier = "sqlite3";
 
     for (int i = 0; i < expected_splits; ++i) {
-      std::stringstream bag_name;
-      bag_name << "bag_" << i << ".db3";
+      const auto bag_file_path = get_bag_file_path(i);
 
-      const auto bag_path = rcpputils::fs::path(root_bag_path_) / bag_name.str();
-
-      metadata.relative_file_paths.push_back(bag_path.string());
+      // There is no guarantee that the bagfile split expected_split times
+      // due to possible io sync delays. Instead, assert that the bagfile split
+      // at least once
+      if (bag_file_path.exists()) {
+        metadata.relative_file_paths.push_back(bag_file_path.string());
+      }
     }
-    metadata_io.write_metadata(root_bag_path_, metadata);
+
+    ASSERT_GE(metadata.relative_file_paths.size(), 1) << "Bagfile never split!";
+    metadata_io.write_metadata(root_bag_path_.string(), metadata);
   }
 #endif
 
-  const auto metadata = metadata_io.read_metadata(root_bag_path_);
+  wait_for_metadata();
+  const auto metadata = metadata_io.read_metadata(root_bag_path_.string());
 
   for (const auto & path : metadata.relative_file_paths) {
     EXPECT_TRUE(rcpputils::fs::exists(path));
+  }
+}
+
+TEST_F(RecordFixture, record_end_to_end_test_with_zstd_file_compression_compresses_files) {
+  constexpr const char topic_name[] = "/test_topic";
+  constexpr const int bagfile_split_size = 4 * 1024 * 1024;  // 4MB.
+
+  std::stringstream command;
+  command << "ros2 bag record" <<
+    " --output " << root_bag_path_.string() <<
+    " --max-bag-size " << bagfile_split_size <<
+    " --compression-mode file" <<
+    " --compression-format zstd"
+    " " << topic_name;
+
+  auto process_handle = start_execution(command.str());
+  wait_for_db();
+
+  constexpr const int expected_splits = 4;
+  {
+    constexpr const char message_str[] = "Test";
+    constexpr const int message_size = 1024 * 1024;  // 1MB
+    // string message from test_msgs
+    const auto message = create_string_message(message_str, message_size);
+    constexpr const int message_count = bagfile_split_size * expected_splits / message_size;
+
+    pub_man_.run_scoped_publisher(
+      topic_name,
+      message,
+      50ms,
+      message_count);
+  }
+
+  stop_execution(process_handle);
+
+  rosbag2_storage::MetadataIo metadata_io;
+
+  // TODO(zmichaels11): Remove when stop_execution properly SIGINT on Windows.
+  // This is required since stop_execution hard kills the proces on Windows,
+  // which prevents the metadata from being written.
+  #ifdef _WIN32
+  {
+    rosbag2_storage::BagMetadata metadata;
+    metadata.version = 3;
+    metadata.storage_identifier = "sqlite3";
+    metadata.compression_mode = "file";
+    metadata.compression_format = "zstd";
+
+    for (int i = 0; i < expected_splits; ++i) {
+      const auto compressed_bag_path = get_compressed_bag_file_path(i);
+
+      // There is no guarantee that the bagfile split expected_split times
+      // due to possible io sync delays. Instead, assert that the bagfile
+      // split at least once.
+      if (compressed_bag_path.exists()) {
+        metadata.relative_file_paths.push_back(compressed_bag_path.string());
+      }
+    }
+
+    ASSERT_GE(metadata.relative_file_paths.size(), 1) << "Bagfile never split!";
+    metadata_io.write_metadata(root_bag_path_.string(), metadata);
+  }
+  #endif
+
+  wait_for_metadata();
+  const auto metadata = metadata_io.read_metadata(root_bag_path_.string());
+
+  for (const auto & path : metadata.relative_file_paths) {
+    const auto file_path = rcpputils::fs::path{path};
+
+    EXPECT_TRUE(file_path.exists()) << "File: \"" <<
+      file_path.string() << "\" does not exist!";
+    EXPECT_EQ(file_path.extension().string(), ".zstd") << "File :\"" <<
+      file_path.string() << "\" does not have proper \".zstd\" extension!";
   }
 }
 

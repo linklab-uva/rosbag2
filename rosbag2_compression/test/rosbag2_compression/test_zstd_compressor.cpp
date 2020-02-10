@@ -102,7 +102,8 @@ TEST_F(CompressionHelperFixture, zstd_compress_file_uri)
   EXPECT_EQ(compressed_uri, expected_compressed_uri);
   EXPECT_LT(compressed_file_size, uncompressed_file_size);
   EXPECT_GT(compressed_file_size, 0u);
-  EXPECT_TRUE(rcpputils::fs::path(compressed_uri).exists());
+  EXPECT_TRUE(rcpputils::fs::exists(compressed_uri)) <<
+    "Expected compressed path: \"" << compressed_uri << "\" to exist!";
 }
 
 TEST_F(CompressionHelperFixture, zstd_decompress_file_uri)
@@ -114,7 +115,10 @@ TEST_F(CompressionHelperFixture, zstd_decompress_file_uri)
   auto zstd_compressor = rosbag2_compression::ZstdCompressor{};
   const auto compressed_uri = zstd_compressor.compress_uri(uri);
 
-  ASSERT_EQ(0, std::remove(uri.c_str()));  // The test is invalid if the initial file is not deleted
+// The test is invalid if the initial file is not deleted
+  ASSERT_EQ(0, std::remove(uri.c_str())) <<
+    "Removal of \"" << uri << "\" failed! The remaining tests require \"" <<
+    uri << "\" to be deleted!";
 
   auto zstd_decompressor = rosbag2_compression::ZstdDecompressor{};
   const auto decompressed_uri = zstd_decompressor.decompress_uri(compressed_uri);
@@ -126,7 +130,8 @@ TEST_F(CompressionHelperFixture, zstd_decompress_file_uri)
   EXPECT_NE(decompressed_uri, compressed_uri);
   EXPECT_EQ(uri, expected_decompressed_uri);
   EXPECT_EQ(initial_file_size, decompressed_file_size);
-  EXPECT_TRUE(rcpputils::fs::path(decompressed_uri).exists());
+  EXPECT_TRUE(rcpputils::fs::exists(decompressed_uri)) <<
+    "Expected decompressed file: \"" << decompressed_uri << "\" to exist!";
 }
 
 TEST_F(CompressionHelperFixture, zstd_decompress_file_contents)
@@ -134,23 +139,46 @@ TEST_F(CompressionHelperFixture, zstd_decompress_file_contents)
   const auto uri = (rcpputils::fs::path(temporary_dir_path_) / "file2.txt").string();
   create_garbage_file(uri);
 
+  ASSERT_TRUE(rcpputils::fs::exists(uri)) <<
+    "Expected initial file: \"" << uri << "\" to exist!";
+
+  const auto initial_data = read_file(uri);
+  const auto initial_file_size = rcutils_get_file_size(uri.c_str());
+
+  EXPECT_EQ(
+    initial_data.size() * sizeof(decltype(initial_data)::value_type),
+    initial_file_size) << "Expected data contents of file to equal file size!";
+
   auto compressor = rosbag2_compression::ZstdCompressor{};
   const auto compressed_uri = compressor.compress_uri(uri);
+
+  ASSERT_TRUE(rcpputils::fs::exists(compressed_uri)) <<
+    "Expected compressed file: \"" << compressed_uri << "\" to exist!";
+
+  ASSERT_EQ(0, std::remove(uri.c_str())) <<
+    "Removal of initial file: \"" << uri <<
+    "\" failed! The remaining tests require \"" << uri << "\" to be deleted.";
 
   auto decompressor = rosbag2_compression::ZstdDecompressor{};
   const auto decompressed_uri = decompressor.decompress_uri(compressed_uri);
 
-  const auto initial_data = read_file(uri);
-  const auto initial_file_size = rcutils_get_file_size(uri.c_str());
+  ASSERT_TRUE(rcpputils::fs::exists(decompressed_uri)) <<
+    "Decompressed file: \"" << decompressed_uri << "\" must exist!";
+
+  EXPECT_EQ(uri, decompressed_uri) <<
+    "Expected decompressed file name to be same as initial!";
+
   const auto decompressed_data = read_file(decompressed_uri);
   const auto decompressed_file_size = rcutils_get_file_size(decompressed_uri.c_str());
 
   EXPECT_EQ(
-    initial_data.size() * sizeof(decltype(initial_data)::value_type),
-    initial_file_size);
-  EXPECT_EQ(
     decompressed_data.size() * sizeof(decltype(initial_data)::value_type),
-    decompressed_file_size);
+    decompressed_file_size) <<
+    "Expected data contents of compressed file to equal compressed file size!";
+
+  ASSERT_EQ(initial_file_size, decompressed_file_size) <<
+    "Initial file size must be same as decompressed file size!";
+
   EXPECT_EQ(initial_data, decompressed_data);
 }
 
@@ -160,7 +188,8 @@ TEST_F(CompressionHelperFixture, zstd_decompress_fails_on_bad_file)
   create_garbage_file(uri);
 
   auto decompressor = rosbag2_compression::ZstdDecompressor{};
-  EXPECT_THROW(decompressor.decompress_uri(uri), std::runtime_error);
+  EXPECT_THROW(decompressor.decompress_uri(uri), std::runtime_error) <<
+    "Expected decompress(\"" << uri << "\") to fail!";
 }
 
 TEST_F(CompressionHelperFixture, zstd_decompress_fails_on_bad_uri)
@@ -168,5 +197,6 @@ TEST_F(CompressionHelperFixture, zstd_decompress_fails_on_bad_uri)
   const auto bad_uri = (rcpputils::fs::path(temporary_dir_path_) / "bad_uri.txt").string();
   auto decompressor = rosbag2_compression::ZstdDecompressor{};
 
-  EXPECT_THROW(decompressor.decompress_uri(bad_uri), std::runtime_error);
+  EXPECT_THROW(decompressor.decompress_uri(bad_uri), std::runtime_error) <<
+    "Expected decompress_uri(\"" << bad_uri << "\") to fail!";
 }
