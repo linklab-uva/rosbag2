@@ -28,6 +28,7 @@ find_package(rosbag2_storage REQUIRED)
 find_package(zstd_vendor REQUIRED)
 add_library(${PROJECT_NAME}_zstd
   SHARED
+  src/rosbag2_compression/compression_utils.cpp
   src/rosbag2_compression/zstd_compressor.cpp
   src/rosbag2_compression/zstd_decompressor.cpp)
 target_include_directories(${PROJECT_NAME}_zstd
