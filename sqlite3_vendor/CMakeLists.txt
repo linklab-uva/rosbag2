@@ -8,7 +8,6 @@ option(FORCE_BUILD_VENDOR_PKG
   OFF)
 
 if(NOT FORCE_BUILD_VENDOR_PKG)
-  list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules")
   find_package(SQLite3 QUIET)
 endif()
 
@@ -34,12 +33,21 @@ if (NOT SQLite3_FOUND)
 
   # The external project will install to the build folder, but we'll install that on make install.
   install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/sqlite3_install/ DESTINATION ${CMAKE_INSTALL_PREFIX})
-else ()
+
+  install(DIRECTORY cmake DESTINATION share/${PROJECT_NAME})
+  
+  ament_package(
+    CONFIG_EXTRAS "sqlite3_vendor-extras.cmake"
+  )
+elseif(TARGET sqlite3)
   message(STATUS "Found SQLite3. Using SQLite3 from system.")
+  add_library(${PROJECT_NAME}_target INTERFACE)
+  target_link_libraries(${PROJECT_NAME}_target INTERFACE sqlite3)
+  install(TARGETS ${PROJECT_NAME}_target EXPORT ${PROJECT_NAME}_target_export)
+  ament_export_targets(${PROJECT_NAME}_target_export)
+  ament_export_dependencies(sqlite3)
+  ament_package()
+else ()
+  message(FATAL_ERROR "Found SQLite3, but it did not provide the imported target: sqlite3")
 endif ()
 
-install(DIRECTORY cmake DESTINATION share/${PROJECT_NAME})
-
-ament_package(
-  CONFIG_EXTRAS "sqlite3_vendor-extras.cmake"
-)
