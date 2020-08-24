@@ -20,22 +20,27 @@ if(WIN32)
   add_definitions(-DNOMINMAX)
 endif()
 
-option(DISABLE_SANITIZERS "disables the use of gcc saniztizers")
-# Only enable sanitizers on x64 architectures
-# https://github.com/google/sanitizers/issues/794
-if(NOT ${CMAKE_SIZEOF_VOID_P} EQUAL 8)
-  set(DISABLE_SANITIZERS ON)
+option(DISABLE_SANITIZERS "disables the use of gcc sanitizers")
+if(NOT DISABLE_SANITIZERS AND CMAKE_COMPILER_IS_GNUCXX)
+  include(CheckCXXSourceCompiles)
+  set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+  set(CMAKE_REQUIRED_FLAGS "${OLD_CMAKE_REQUIRED_FLAGS} -fsanitize=leak")
+  check_cxx_source_compiles("int main() {}" HAVE_SANITIZERS)
+  set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
+  if(NOT HAVE_SANITIZERS)
+    set(DISABLE_SANITIZERS ON)
+    message(WARNING "Sanitizers aren't supported by the compiler - disabling")
+  endif()
 endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(pluginlib REQUIRED)
-find_package(poco_vendor)
-find_package(Poco COMPONENTS Foundation)
 find_package(rcpputils REQUIRED)
 find_package(rcutils REQUIRED)
 find_package(rosbag2_storage REQUIRED)
-find_package(rosidl_generator_cpp REQUIRED)
+find_package(rosidl_runtime_c REQUIRED)
+find_package(rosidl_runtime_cpp REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 
@@ -54,13 +59,13 @@ add_library(${PROJECT_NAME} SHARED
 ament_target_dependencies(${PROJECT_NAME}
   ament_index_cpp
   pluginlib
-  Poco
   rcpputils
   rcutils
   rosbag2_storage
-  rosidl_generator_cpp
-  rosidl_typesupport_introspection_cpp
+  rosidl_runtime_c
+  rosidl_runtime_cpp
   rosidl_typesupport_cpp
+  rosidl_typesupport_introspection_cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -82,13 +87,21 @@ install(
 
 install(
   TARGETS ${PROJECT_NAME}
+  EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
-ament_export_dependencies(pluginlib rosbag2_storage rosidl_typesupport_introspection_cpp)
+ament_export_targets(export_${PROJECT_NAME})
+ament_export_dependencies(pluginlib
+  rosbag2_storage
+  rosidl_runtime_c
+  rosidl_runtime_cpp
+  rosidl_typesupport_cpp
+  rosidl_typesupport_introspection_cpp
+)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gmock REQUIRED)
@@ -160,10 +173,9 @@ if(BUILD_TESTING)
       $<INSTALL_INTERFACE:include>)
     ament_target_dependencies(test_ros2_message
       ament_index_cpp
-      Poco
-      rcutils
+      rcpputils
       rosbag2_storage
-      rosidl_generator_cpp
+      rosidl_runtime_cpp
       rosidl_typesupport_introspection_cpp
       rosidl_typesupport_cpp
       test_msgs)

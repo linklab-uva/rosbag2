@@ -23,8 +23,6 @@
 
 #include "rcpputils/filesystem_helper.hpp"
 
-#include "rcutils/filesystem.h"
-
 #include "rosbag2_cpp/info.hpp"
 #include "rosbag2_cpp/storage_options.hpp"
 
@@ -45,6 +43,12 @@ std::string format_storage_uri(const std::string & base_folder, uint64_t storage
 
   return (rcpputils::fs::path(base_folder) / storage_file_name.str()).string();
 }
+
+std::string strip_parent_path(const std::string & relative_path)
+{
+  return rcpputils::fs::path(relative_path).filename().string();
+}
+
 }  // namespace
 
 SequentialWriter::SequentialWriter(
@@ -57,6 +61,8 @@ SequentialWriter::SequentialWriter(
   metadata_io_(std::move(metadata_io)),
   converter_(nullptr),
   max_bagfile_size_(rosbag2_storage::storage_interfaces::MAX_BAGFILE_SIZE_NO_SPLIT),
+  max_bagfile_duration(
+    std::chrono::seconds(rosbag2_storage::storage_interfaces::MAX_BAGFILE_DURATION_NO_SPLIT)),
   topics_names_to_info_(),
   metadata_()
 {}
@@ -72,20 +78,39 @@ void SequentialWriter::init_metadata()
   metadata_.storage_identifier = storage_->get_storage_identifier();
   metadata_.starting_time = std::chrono::time_point<std::chrono::high_resolution_clock>(
     std::chrono::nanoseconds::max());
-  metadata_.relative_file_paths = {storage_->get_relative_file_path()};
+  metadata_.relative_file_paths = {strip_parent_path(storage_->get_relative_file_path())};
 }
 
 void SequentialWriter::open(
   const StorageOptions & storage_options,
   const ConverterOptions & converter_options)
 {
-  max_bagfile_size_ = storage_options.max_bagfile_size;
   base_folder_ = storage_options.uri;
+  max_bagfile_size_ = storage_options.max_bagfile_size;
+  max_bagfile_duration = std::chrono::seconds(storage_options.max_bagfile_duration);
+  max_cache_size_ = storage_options.max_cache_size;
+
+  cache_.reserve(max_cache_size_);
 
   if (converter_options.output_serialization_format !=
     converter_options.input_serialization_format)
   {
     converter_ = std::make_unique<Converter>(converter_options, converter_factory_);
+  }
+
+  rcpputils::fs::path db_path(base_folder_);
+  if (db_path.is_directory()) {
+    std::stringstream error;
+    error << "Database directory already exists (" << db_path.string() <<
+      "), can't overwrite existing database";
+    throw std::runtime_error{error.str()};
+  }
+
+  bool dir_created = rcpputils::fs::create_directories(db_path);
+  if (!dir_created) {
+    std::stringstream error;
+    error << "Failed to create database directory (" << db_path.string() << ").";
+    throw std::runtime_error{error.str()};
   }
 
   const auto storage_uri = format_storage_uri(base_folder_, 0);
@@ -98,8 +123,11 @@ void SequentialWriter::open(
   if (max_bagfile_size_ != 0 &&
     max_bagfile_size_ < storage_->get_minimum_split_file_size())
   {
-    throw std::runtime_error(
-            "Invalid bag splitting size given. Please provide a different value.");
+    std::stringstream error;
+    error << "Invalid bag splitting size given. Please provide a value greater than " <<
+      storage_->get_minimum_split_file_size() << ". Specified value of " <<
+      storage_options.max_bagfile_size;
+    throw std::runtime_error{error.str()};
   }
 
   init_metadata();
@@ -177,7 +205,7 @@ void SequentialWriter::split_bagfile()
     throw std::runtime_error(errmsg.str());
   }
 
-  metadata_.relative_file_paths.push_back(storage_->get_relative_file_path());
+  metadata_.relative_file_paths.push_back(strip_parent_path(storage_->get_relative_file_path()));
 
   // Re-register all topics since we rolled-over to a new bagfile.
   for (const auto & topic : topics_names_to_info_) {
@@ -192,10 +220,20 @@ void SequentialWriter::write(std::shared_ptr<rosbag2_storage::SerializedBagMessa
   }
 
   // Update the message count for the Topic.
-  ++topics_names_to_info_.at(message->topic_name).message_count;
+  try {
+    ++topics_names_to_info_.at(message->topic_name).message_count;
+  } catch (const std::out_of_range & /* oor */) {
+    std::stringstream errmsg;
+    errmsg << "Failed to write on topic '" << message->topic_name <<
+      "'. Call create_topic() before first write.";
+    throw std::runtime_error(errmsg.str());
+  }
 
   if (should_split_bagfile()) {
     split_bagfile();
+
+    // Update bagfile starting time
+    metadata_.starting_time = std::chrono::high_resolution_clock::now();
   }
 
   const auto message_timestamp = std::chrono::time_point<std::chrono::high_resolution_clock>(
@@ -205,16 +243,41 @@ void SequentialWriter::write(std::shared_ptr<rosbag2_storage::SerializedBagMessa
   const auto duration = message_timestamp - metadata_.starting_time;
   metadata_.duration = std::max(metadata_.duration, duration);
 
-  storage_->write(converter_ ? converter_->convert(message) : message);
+  // if cache size is set to zero, we directly call write
+  if (max_cache_size_ == 0u) {
+    storage_->write(converter_ ? converter_->convert(message) : message);
+  } else {
+    cache_.push_back(converter_ ? converter_->convert(message) : message);
+    if (cache_.size() >= max_cache_size_) {
+      storage_->write(cache_);
+      // reset cache
+      cache_.clear();
+      cache_.reserve(max_cache_size_);
+    }
+  }
 }
 
 bool SequentialWriter::should_split_bagfile() const
 {
-  if (max_bagfile_size_ == rosbag2_storage::storage_interfaces::MAX_BAGFILE_SIZE_NO_SPLIT) {
-    return false;
-  } else {
-    return storage_->get_bagfile_size() > max_bagfile_size_;
+  // Assume we aren't splitting
+  bool should_split = false;
+
+  // Splitting by size
+  if (max_bagfile_size_ != rosbag2_storage::storage_interfaces::MAX_BAGFILE_SIZE_NO_SPLIT) {
+    should_split = should_split || (storage_->get_bagfile_size() > max_bagfile_size_);
   }
+
+  // Splitting by time
+  if (max_bagfile_duration != std::chrono::seconds(
+      rosbag2_storage::storage_interfaces::MAX_BAGFILE_DURATION_NO_SPLIT))
+  {
+    auto max_duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      max_bagfile_duration);
+    should_split = should_split ||
+      ((std::chrono::high_resolution_clock::now() - metadata_.starting_time) > max_duration_ns);
+  }
+
+  return should_split;
 }
 
 void SequentialWriter::finalize_metadata()
@@ -222,7 +285,11 @@ void SequentialWriter::finalize_metadata()
   metadata_.bag_size = 0;
 
   for (const auto & path : metadata_.relative_file_paths) {
-    metadata_.bag_size += rcutils_get_file_size(path.c_str());
+    const auto bag_path = rcpputils::fs::path{path};
+
+    if (bag_path.exists()) {
+      metadata_.bag_size += bag_path.file_size();
+    }
   }
 
   metadata_.topics_with_message_count.clear();

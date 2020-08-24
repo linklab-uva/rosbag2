@@ -75,16 +75,20 @@ public:
 
   template<class T>
   void add_publisher(
-    const std::string & topic_name, std::shared_ptr<T> message, size_t expected_messages = 0)
+    const std::string & topic_name,
+    std::shared_ptr<T> message,
+    size_t expected_messages = 0,
+    const rclcpp::QoS & qos = rclcpp::QoS{rclcpp::KeepAll()})
   {
     auto node_name = std::string("publisher") + std::to_string(counter_++);
     auto publisher_node = std::make_shared<rclcpp::Node>(
       node_name,
-      rclcpp::NodeOptions().start_parameter_event_publisher(false));
-    auto publisher = publisher_node->create_publisher<T>(topic_name, 10);
+      rclcpp::NodeOptions().start_parameter_event_publisher(false).enable_rosout(false));
+    auto publisher = publisher_node->create_publisher<T>(topic_name, qos);
 
     publisher_nodes_.push_back(publisher_node);
-    publishers_.push_back([publisher, topic_name, message, expected_messages](
+    publishers_.push_back(
+      [publisher, topic_name, message, expected_messages](
         CountFunction count_stored_messages) {
         if (expected_messages != 0) {
           while (rclcpp::ok() && count_stored_messages(topic_name) < expected_messages) {

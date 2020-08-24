@@ -113,6 +113,15 @@ private:
   // Used in bagfile splitting; specifies the best-effort maximum sub-section of a bagfile in bytes.
   uint64_t max_bagfile_size_;
 
+  // Used in bagfile splitting;
+  // specifies the best-effort maximum duration of a bagfile in seconds.
+  std::chrono::seconds max_bagfile_duration;
+
+  // Intermediate cache to write multiple messages into the storage.
+  // `max_cache_size` is the amount of messages to hold in storage before writing to disk.
+  uint64_t max_cache_size_;
+  std::vector<std::shared_ptr<const rosbag2_storage::SerializedBagMessage>> cache_;
+
   // Used to track topic -> message count
   std::unordered_map<std::string, rosbag2_storage::TopicInformation> topics_names_to_info_;
 
