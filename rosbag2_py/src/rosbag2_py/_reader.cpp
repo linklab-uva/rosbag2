@@ -15,6 +15,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,7 +26,7 @@
 #include "rosbag2_cpp/reader.hpp"
 #include "rosbag2_cpp/storage_options.hpp"
 #include "rosbag2_storage/storage_filter.hpp"
-#include "rosbag2_storage/topic_metadata.hpp"
+#include "rosbag2_storage/bag_metadata.hpp"
 
 namespace rosbag2_py
 {
@@ -62,12 +63,23 @@ public:
     return pybind11::make_tuple(
       next->topic_name, pybind11::bytes(serialized_data), next->time_stamp);
   }
-
+  /// Return a mapping from topic name to message count.
+  std::map<std::string, size_t> get_topic_counts()
+  {
+    std::vector<rosbag2_storage::TopicInformation> topic_info = reader_->get_metadata().topics_with_message_count;
+    std::map<std::string, size_t> rtn;
+    for (const rosbag2_storage::TopicInformation& info : topic_info)
+    {
+      rtn.emplace(std::pair<std::string, size_t>(info.topic_metadata.name, info.message_count));
+    }
+    return rtn;
+  }
   /// Return a mapping from topic name to topic type.
   std::vector<rosbag2_storage::TopicMetadata> get_all_topics_and_types()
   {
     return reader_->get_all_topics_and_types();
   }
+
 
   void set_filter(const rosbag2_storage::StorageFilter & storage_filter)
   {
@@ -96,6 +108,7 @@ PYBIND11_MODULE(_reader, m) {
   .def(
     "get_all_topics_and_types",
     &rosbag2_py::Reader<rosbag2_cpp::readers::SequentialReader>::get_all_topics_and_types)
+  .def("get_topic_counts", &rosbag2_py::Reader<rosbag2_cpp::readers::SequentialReader>::get_topic_counts)
   .def("set_filter", &rosbag2_py::Reader<rosbag2_cpp::readers::SequentialReader>::set_filter)
   .def("reset_filter", &rosbag2_py::Reader<rosbag2_cpp::readers::SequentialReader>::reset_filter);
 
